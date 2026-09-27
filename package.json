@@ -1,0 +1,17 @@
+{
+  "name": "trpg-timer",
+  "version": "1.0.0",
+  "description": "TRPG 타임어택 타이머 + 영상 동시 시청",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.0.2",
+    "socket.io": "^4.8.1"
+  }
+}

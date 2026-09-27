@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TRPG Timer & Media Share</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+        .font-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+        body { font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; }
+        input[type=range] { accent-color: #e4e4e7; }
+        #video-frame:fullscreen { border-radius: 0; border: 0; }
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col justify-between items-center p-6 select-none">
+
+    <!-- 상단 헤더 -->
+    <header class="w-full max-w-4xl flex justify-between items-center border-b border-zinc-800 pb-4 gap-3">
+        <div>
+            <h1 class="text-xs tracking-wider text-zinc-400 font-semibold uppercase">TRPG Session Tool</h1>
+            <p id="app-subtitle" class="text-base font-medium text-zinc-200">타이머 및 영상 함께 보기</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button onclick="toggleVideoSection()" class="text-xs bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-3 py-1.5 rounded-md transition border border-zinc-800 flex items-center gap-1.5">
+                📹 영상 패널 열기/닫기
+            </button>
+            <div id="connection-status" class="text-xs px-3 py-1 rounded-md bg-zinc-900 text-zinc-400 border border-zinc-800 whitespace-nowrap">
+                연결 중…
+            </div>
+        </div>
+    </header>
+
+    <!-- 메인 콘텐츠 영역 -->
+    <main class="w-full max-w-4xl flex flex-col items-center justify-center my-auto py-6 gap-8">
+
+        <!-- 타이머 디스플레이 -->
+        <div class="flex flex-col items-center justify-center">
+            <div class="text-zinc-500 text-xs font-medium tracking-widest uppercase mb-3">Remaining Time</div>
+            <div id="timer-display" class="font-mono text-6xl md:text-8xl font-bold tracking-tight text-zinc-100 drop-shadow-sm">
+                00:00:00
+            </div>
+            <div id="timer-status-text" class="text-xs text-zinc-500 mt-4 tracking-wide font-light">대기 중</div>
+        </div>
+
+        <!-- 영상 공유 영역 -->
+        <div id="video-container" class="w-full bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4 hidden">
+            <div class="flex justify-between items-center mb-3 px-2 gap-3 flex-wrap">
+                <div class="min-w-0">
+                    <span class="text-xs font-semibold text-zinc-300">함께 보는 영상</span>
+                    <span id="media-name" class="text-xs text-zinc-500 ml-2 truncate"></span>
+                </div>
+
+                <!-- KP 전용: 업로드 -->
+                <div id="kp-media-controls" class="hidden flex items-center gap-2">
+                    <input type="file" id="video-file" accept="video/*" class="hidden" onchange="onFileSelected(this)">
+                    <button onclick="document.getElementById('video-file').click()" id="upload-btn" class="text-xs bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-semibold px-3 py-1.5 rounded transition">영상 파일 올리기</button>
+                    <button onclick="clearMedia()" id="clear-btn" class="hidden text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded transition border border-zinc-700">공유 중지</button>
+                </div>
+
+                <!-- 플레이어 전용: 볼륨/전체화면 -->
+                <div id="player-media-controls" class="hidden flex items-center gap-3">
+                    <label class="flex items-center gap-2 text-xs text-zinc-400">
+                        🔊 <input type="range" id="volume" min="0" max="1" step="0.05" value="1" class="w-24" oninput="setVolume(this.value)">
+                    </label>
+                    <button onclick="goFullscreen()" class="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded transition border border-zinc-700">전체화면</button>
+                </div>
+            </div>
+
+            <!-- 업로드 진행률 -->
+            <div id="upload-progress-wrap" class="hidden px-2 mb-3">
+                <div class="flex justify-between text-[10px] text-zinc-500 mb-1">
+                    <span>업로드 중</span><span id="upload-progress-text">0%</span>
+                </div>
+                <div class="h-1 bg-zinc-800 rounded overflow-hidden">
+                    <div id="upload-progress-bar" class="h-full bg-zinc-300 transition-all" style="width:0%"></div>
+                </div>
+            </div>
+
+            <div id="video-frame" class="relative bg-zinc-950 rounded-xl overflow-hidden border border-zinc-800 aspect-video flex items-center justify-center">
+                <video id="shared-video" playsinline preload="auto" class="w-full h-full object-contain"></video>
+                <span id="video-placeholder" class="absolute text-xs text-zinc-600">공유 중인 영상 없음</span>
+                <!-- 브라우저 자동재생 차단 시 표시 -->
+                <button id="unlock-overlay" onclick="unlockPlayback()" class="hidden absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-2 text-zinc-200">
+                    <span class="text-3xl">▶</span>
+                    <span class="text-xs">눌러서 영상 시청에 참여</span>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- KP / 마스터 전용 제어판 -->
+    <div id="kp-control-panel" class="w-full max-w-4xl bg-zinc-900/90 border border-zinc-800 rounded-xl p-5 hidden backdrop-blur shadow-2xl mb-4">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xs font-semibold text-zinc-300 tracking-wider flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-zinc-400"></span> 마스터 제어판
+            </h2>
+            <button onclick="copyShareLink()" class="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded transition border border-zinc-700 flex items-center gap-1.5">
+                🔗 플레이어용 링크 복사
+            </button>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+            <button onclick="socket.emit('timer:start')" class="bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-semibold py-2.5 rounded-lg transition text-xs">시작</button>
+            <button onclick="socket.emit('timer:pause')" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold py-2.5 rounded-lg transition text-xs border border-zinc-700">일시정지</button>
+            <button onclick="socket.emit('timer:reset')" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold py-2.5 rounded-lg transition text-xs border border-zinc-700">초기화</button>
+            <button onclick="openTimeModal()" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold py-2.5 rounded-lg transition text-xs border border-zinc-700">시간 설정</button>
+        </div>
+    </div>
+
+    <!-- 플레이어 안내 메시지 -->
+    <div id="player-view-msg" class="w-full max-w-4xl text-center text-xs text-zinc-500 pb-2 font-light">
+        마스터(KP)의 화면과 실시간으로 연동되는 타이머입니다.
+    </div>
+
+    <!-- 시간 직접 설정 모달 -->
+    <div id="time-modal" class="fixed inset-0 bg-black/80 hidden flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 class="text-sm font-semibold text-zinc-200 mb-4">제한 시간 직접 설정</h3>
+            <div class="flex gap-2 mb-5">
+                <div class="flex-1">
+                    <label class="text-[10px] text-zinc-500 block mb-1">시간 (Hour)</label>
+                    <input type="number" id="input-hours" min="0" max="99" value="0" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-center text-white font-mono text-sm focus:outline-none focus:border-zinc-600">
+                </div>
+                <div class="flex-1">
+                    <label class="text-[10px] text-zinc-500 block mb-1">분 (Min)</label>
+                    <input type="number" id="input-minutes" min="0" max="59" value="0" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-center text-white font-mono text-sm focus:outline-none focus:border-zinc-600">
+                </div>
+                <div class="flex-1">
+                    <label class="text-[10px] text-zinc-500 block mb-1">초 (Sec)</label>
+                    <input type="number" id="input-seconds" min="0" max="59" value="0" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-center text-white font-mono text-sm focus:outline-none focus:border-zinc-600">
+                </div>
+            </div>
+            <div class="flex justify-end gap-2">
+                <button onclick="closeTimeModal()" class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition">취소</button>
+                <button onclick="applyCustomTime()" class="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-950 rounded-lg text-xs font-semibold transition">적용</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 알림 토스트 -->
+    <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs px-4 py-2.5 rounded-lg shadow-2xl hidden"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const urlParams = new URLSearchParams(location.search);
+        const kpKey = urlParams.get('kp') || '';
+        let isKP = false;
+
+        const socket = io({ auth: { key: kpKey } });
+
+        // ================= 공통 =================
+        let toastTimer = null;
+        function showToast(msg) {
+            const t = $('toast');
+            t.textContent = msg;
+            t.classList.remove('hidden');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => t.classList.add('hidden'), 3000);
+        }
+
+        // 서버 시각 보정 (모든 사람이 같은 시각 기준으로 타이머/영상을 계산)
+        let clockOffset = 0;
+        const serverNow = () => Date.now() + clockOffset;
+        function syncClock() {
+            let bestRtt = Infinity;
+            for (let i = 0; i < 5; i++) {
+                setTimeout(() => {
+                    const t0 = Date.now();
+                    socket.emit('time:ping', t0, (st) => {
+                        const rtt = Date.now() - t0;
+                        if (rtt < bestRtt) { bestRtt = rtt; clockOffset = st - (t0 + rtt / 2); }
+                    });
+                }, i * 200);
+            }
+        }
+        setInterval(syncClock, 60000);
+
+        let presenceCount = 0;
+        function setStatus(text, ok) {
+            const el = $('connection-status');
+            el.textContent = text;
+            el.className = `text-xs px-3 py-1 rounded-md border whitespace-nowrap ${ok
+                ? 'bg-zinc-900 text-zinc-300 border-zinc-700'
+                : 'bg-zinc-900 text-rose-400 border-rose-900/60'}`;
+        }
+
+        socket.on('connect', () => { syncClock(); setStatus('연결됨', true); });
+        socket.on('disconnect', () => setStatus('연결 끊김 · 재연결 중', false));
+        socket.on('presence', ({ count }) => {
+            presenceCount = count;
+            if (socket.connected) setStatus(`연결됨 · ${count}명 접속`, true);
+        });
+
+        socket.on('role', ({ isKP: kp }) => {
+            isKP = kp;
+            $('kp-control-panel').classList.toggle('hidden', !isKP);
+            $('player-view-msg').classList.toggle('hidden', isKP);
+            $('kp-media-controls').classList.toggle('hidden', !isKP);
+            $('player-media-controls').classList.toggle('hidden', isKP);
+            video.controls = isKP;
+            if (kpKey && !isKP) showToast('KP 키가 맞지 않아 플레이어로 접속했습니다.');
+        });
+
+        // ================= 타이머 =================
+        let timerState = { initial: 0, remaining: 0, running: false, endAt: null };
+        socket.on('timer:state', (st) => { timerState = st; renderTimer(); });
+
+        function currentRemaining() {
+            if (timerState.running && timerState.endAt) return Math.max(0, (timerState.endAt - serverNow()) / 1000);
+            return timerState.remaining;
+        }
+
+        let lastRendered = '';
+        function renderTimer() {
+            const total = Math.ceil(currentRemaining() - 0.0001);
+            const h = Math.floor(total / 3600);
+            const m = Math.floor((total % 3600) / 60);
+            const s = total % 60;
+            const text = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+
+            let status, cls;
+            if (timerState.running && total > 0) {
+                status = '측정 진행 중'; cls = 'text-xs text-zinc-300 mt-4 tracking-wide font-normal';
+            } else if (total === 0 && timerState.initial > 0) {
+                status = '시간 종료'; cls = 'text-xs text-rose-400 mt-4 tracking-wide font-semibold';
+            } else if (timerState.remaining === timerState.initial) {
+                status = '대기 중'; cls = 'text-xs text-zinc-500 mt-4 tracking-wide font-light';
+            } else {
+                status = '일시정지됨'; cls = 'text-xs text-zinc-500 mt-4 tracking-wide font-light';
+            }
+
+            const key = text + status;
+            if (key === lastRendered) return;
+            lastRendered = key;
+            $('timer-display').innerText = text;
+            $('timer-status-text').innerText = status;
+            $('timer-status-text').className = cls;
+        }
+        setInterval(renderTimer, 100);
+
+        function openTimeModal() {
+            const init = timerState.initial || 0;
+            $('input-hours').value = Math.floor(init / 3600);
+            $('input-minutes').value = Math.floor((init % 3600) / 60);
+            $('input-seconds').value = init % 60;
+            $('time-modal').classList.remove('hidden');
+        }
+        function closeTimeModal() { $('time-modal').classList.add('hidden'); }
+
+        function applyCustomTime() {
+            socket.emit('timer:set', {
+                h: parseInt($('input-hours').value) || 0,
+                m: parseInt($('input-minutes').value) || 0,
+                s: parseInt($('input-seconds').value) || 0,
+            });
+            closeTimeModal();
+        }
+
+        function copyShareLink() {
+            const link = location.origin + location.pathname;
+            navigator.clipboard.writeText(link).then(
+                () => showToast('플레이어용 링크를 복사했습니다.'),
+                () => prompt('아래 주소를 복사해서 공유하세요.', link)
+            );
+        }
+
+        // ================= 영상 공유 =================
+        const video = $('shared-video');
+        let mediaState = null;
+        let currentSrc = null;
+        let ignoreNextSeek = false;
+
+        function toggleVideoSection() { $('video-container').classList.toggle('hidden'); }
+
+        function expectedPosition() {
+            if (!mediaState) return 0;
+            if (!mediaState.playing) return mediaState.position;
+            return mediaState.position + (serverNow() - mediaState.updatedAt) / 1000;
+        }
+
+        socket.on('media:state', (st) => {
+            mediaState = st;
+            $('media-name').textContent = st.name || '';
+            $('clear-btn').classList.toggle('hidden', !st.url);
+
+            if (!st.url) {
+                currentSrc = null;
+                video.pause();
+                video.removeAttribute('src');
+                video.load();
+                $('video-placeholder').style.display = 'block';
+                $('unlock-overlay').classList.add('hidden');
+                return;
+            }
+
+            $('video-placeholder').style.display = 'none';
+
+            if (currentSrc !== st.url) {
+                currentSrc = st.url;
+                video.src = st.url;
+                $('video-container').classList.remove('hidden'); // 새 영상이 올라오면 패널 자동 열기
+                if (isKP) {
+                    // KP가 새로고침한 경우 현재 위치로 맞춰둠
+                    video.addEventListener('loadedmetadata', () => {
+                        const pos = expectedPosition();
+                        if (pos > 0.1) { ignoreNextSeek = true; video.currentTime = pos; }
+                    }, { once: true });
+                }
+            }
+            syncPlayer();
+        });
+
+        // --- KP: 내 재생 조작을 모두에게 전송 ---
+        video.addEventListener('play', () => {
+            if (isKP && mediaState?.url) socket.emit('media:play', { position: video.currentTime });
+        });
+        video.addEventListener('pause', () => {
+            if (isKP && mediaState?.url) socket.emit('media:pause', { position: video.currentTime });
+        });
+        video.addEventListener('seeked', () => {
+            if (!isKP || !mediaState?.url) return;
+            if (ignoreNextSeek) { ignoreNextSeek = false; return; }
+            socket.emit('media:seek', { position: video.currentTime, playing: !video.paused });
+        });
+        // KP 쪽 버퍼링 등으로 생기는 오차를 주기적으로 보정
+        setInterval(() => {
+            if (isKP && mediaState?.url && !video.paused) socket.emit('media:play', { position: video.currentTime });
+        }, 5000);
+
+        // --- 플레이어: KP 상태를 따라감 ---
+        function syncPlayer() {
+            if (isKP || !mediaState?.url || video.readyState < 1) return;
+            const duration = video.duration || Infinity;
+            const target = Math.min(expectedPosition(), duration);
+
+            if (Math.abs(video.currentTime - target) > 1) video.currentTime = target;
+
+            const shouldPlay = mediaState.playing && target < duration - 0.2;
+            if (shouldPlay && video.paused) {
+                video.play()
+                    .then(() => $('unlock-overlay').classList.add('hidden'))
+                    .catch(() => $('unlock-overlay').classList.remove('hidden'));
+            } else if (!shouldPlay && !video.paused) {
+                video.pause();
+            }
+        }
+        video.addEventListener('loadedmetadata', syncPlayer);
+        video.addEventListener('canplay', syncPlayer);
+        setInterval(syncPlayer, 1000);
+
+        function unlockPlayback() {
+            $('unlock-overlay').classList.add('hidden');
+            video.play().catch(() => {}).finally(syncPlayer);
+        }
+
+        function setVolume(v) { video.volume = Number(v); }
+        function goFullscreen() {
+            const el = $('video-frame');
+            (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+        }
+
+        // --- KP: 업로드 ---
+        function onFileSelected(input) {
+            const file = input.files[0];
+            input.value = '';
+            if (!file) return;
+            if (!video.canPlayType(file.type || 'video/mp4')) {
+                showToast('이 형식은 브라우저에서 재생되지 않을 수 있습니다. MP4(H.264) 권장');
+            }
+            uploadVideo(file);
+        }
+
+        function uploadVideo(file) {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload');
+            xhr.setRequestHeader('x-kp-key', kpKey);
+            xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
+
+            $('upload-progress-wrap').classList.remove('hidden');
+            $('upload-btn').disabled = true;
+            $('upload-btn').classList.add('opacity-50');
+
+            xhr.upload.onprogress = (e) => {
+                if (!e.lengthComputable) return;
+                const pct = Math.round((e.loaded / e.total) * 100);
+                $('upload-progress-bar').style.width = pct + '%';
+                $('upload-progress-text').textContent = pct + '%';
+            };
+            const done = () => {
+                $('upload-progress-wrap').classList.add('hidden');
+                $('upload-progress-bar').style.width = '0%';
+                $('upload-btn').disabled = false;
+                $('upload-btn').classList.remove('opacity-50');
+            };
+            xhr.onload = () => {
+                done();
+                if (xhr.status === 200) return showToast('영상을 올렸습니다. 재생하면 모두에게 함께 재생됩니다.');
+                let msg = '업로드에 실패했습니다.';
+                try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+                showToast(msg);
+            };
+            xhr.onerror = () => { done(); showToast('업로드 중 연결이 끊겼습니다. 다시 시도하세요.'); };
+
+            const fd = new FormData();
+            fd.append('video', file);
+            xhr.send(fd);
+        }
+
+        function clearMedia() {
+            if (confirm('영상 공유를 중지할까요? 올린 파일은 서버에서 삭제됩니다.')) socket.emit('media:clear');
+        }
+
+        // 모달: Enter 적용 / Esc 닫기
+        document.addEventListener('keydown', (e) => {
+            if ($('time-modal').classList.contains('hidden')) return;
+            if (e.key === 'Enter') applyCustomTime();
+            if (e.key === 'Escape') closeTimeModal();
+        });
+    </script>
+</body>
+</html>
