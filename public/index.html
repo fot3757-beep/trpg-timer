@@ -26,6 +26,9 @@
             <button onclick="toggleVideoSection()" class="text-xs bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-3 py-1.5 rounded-md transition border border-zinc-800 flex items-center gap-1.5">
                 📹 영상 패널 열기/닫기
             </button>
+            <button id="kp-auth-btn" onclick="onAuthButton()" class="text-xs bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-3 py-1.5 rounded-md transition border border-zinc-800 whitespace-nowrap">
+                🔒 마스터 로그인
+            </button>
             <div id="connection-status" class="text-xs px-3 py-1 rounded-md bg-zinc-900 text-zinc-400 border border-zinc-800 whitespace-nowrap">
                 연결 중…
             </div>
@@ -54,9 +57,9 @@
 
                 <!-- KP 전용: 업로드 -->
                 <div id="kp-media-controls" class="hidden flex items-center gap-2">
-                    <input type="file" id="video-file" accept="video/*" class="hidden" onchange="onFileSelected(this)">
+                    <input type="file" id="video-file" accept="video/*" multiple class="hidden" onchange="onFileSelected(this)">
                     <button onclick="document.getElementById('video-file').click()" id="upload-btn" class="text-xs bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-semibold px-3 py-1.5 rounded transition">영상 파일 올리기</button>
-                    <button onclick="clearMedia()" id="clear-btn" class="hidden text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded transition border border-zinc-700">공유 중지</button>
+                    <button onclick="socket.emit('media:clear')" id="clear-btn" class="hidden text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded transition border border-zinc-700">화면에서 내리기</button>
                 </div>
 
                 <!-- 플레이어 전용: 볼륨/전체화면 -->
@@ -71,7 +74,7 @@
             <!-- 업로드 진행률 -->
             <div id="upload-progress-wrap" class="hidden px-2 mb-3">
                 <div class="flex justify-between text-[10px] text-zinc-500 mb-1">
-                    <span>업로드 중</span><span id="upload-progress-text">0%</span>
+                    <span id="upload-progress-label" class="truncate mr-2">업로드 중</span><span id="upload-progress-text">0%</span>
                 </div>
                 <div class="h-1 bg-zinc-800 rounded overflow-hidden">
                     <div id="upload-progress-bar" class="h-full bg-zinc-300 transition-all" style="width:0%"></div>
@@ -86,6 +89,13 @@
                     <span class="text-3xl">▶</span>
                     <span class="text-xs">눌러서 영상 시청에 참여</span>
                 </button>
+            </div>
+
+            <!-- KP 전용: 올려둔 영상 목록 -->
+            <div id="library-wrap" class="hidden mt-4 px-1">
+                <div class="text-[10px] text-zinc-500 mb-2 px-1">올려둔 영상 · 틀 영상을 고르세요</div>
+                <div id="library-list" class="flex flex-col gap-1.5"></div>
+                <div id="library-empty" class="text-xs text-zinc-600 px-1 py-3">아직 올린 영상이 없습니다. 오른쪽 위 "영상 파일 올리기"로 여러 개를 한 번에 올릴 수 있어요.</div>
             </div>
         </div>
     </main>
@@ -111,6 +121,21 @@
     <!-- 플레이어 안내 메시지 -->
     <div id="player-view-msg" class="w-full max-w-4xl text-center text-xs text-zinc-500 pb-2 font-light">
         마스터(KP)의 화면과 실시간으로 연동되는 타이머입니다.
+    </div>
+
+    <!-- 마스터 로그인 모달 -->
+    <div id="login-modal" class="fixed inset-0 bg-black/80 hidden flex items-center justify-center p-4 backdrop-blur-sm">
+        <form onsubmit="submitLogin(event)" class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 class="text-sm font-semibold text-zinc-200 mb-1">마스터 로그인</h3>
+            <p class="text-[11px] text-zinc-500 mb-4">한 번 로그인하면 이 브라우저에서는 다음부터 자동으로 마스터로 접속됩니다.</p>
+            <input type="password" id="login-password" autocomplete="current-password" placeholder="비밀번호"
+                class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-white text-sm focus:outline-none focus:border-zinc-600 mb-2">
+            <p id="login-error" class="text-[11px] text-rose-400 min-h-[1rem] mb-3"></p>
+            <div class="flex justify-end gap-2">
+                <button type="button" onclick="closeLoginModal()" class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition">취소</button>
+                <button type="submit" id="login-submit" class="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-950 rounded-lg text-xs font-semibold transition">로그인</button>
+            </div>
+        </form>
     </div>
 
     <!-- 시간 직접 설정 모달 -->
@@ -145,8 +170,18 @@
     <script>
         const $ = (id) => document.getElementById(id);
         const urlParams = new URLSearchParams(location.search);
-        const kpKey = urlParams.get('kp') || '';
+        const STORE_KEY = 'trpg-kp-key';
+        const store = {
+            get: () => { try { return localStorage.getItem(STORE_KEY) || ''; } catch { return ''; } },
+            set: (v) => { try { localStorage.setItem(STORE_KEY, v); } catch {} },
+            clear: () => { try { localStorage.removeItem(STORE_KEY); } catch {} },
+        };
+
+        // 예전 방식(?kp=비밀번호) 주소도 계속 동작. 주소창에서는 지워줌
+        let kpKey = urlParams.get('kp') || store.get();
+        if (urlParams.has('kp')) history.replaceState(null, '', location.pathname);
         let isKP = false;
+        let autoLoginChecked = false;
 
         const socket = io({ auth: { key: kpKey } });
 
@@ -199,9 +234,53 @@
             $('player-view-msg').classList.toggle('hidden', isKP);
             $('kp-media-controls').classList.toggle('hidden', !isKP);
             $('player-media-controls').classList.toggle('hidden', isKP);
+            $('library-wrap').classList.toggle('hidden', !isKP);
+            renderLibrary();
             video.controls = isKP;
-            if (kpKey && !isKP) showToast('KP 키가 맞지 않아 플레이어로 접속했습니다.');
+            $('kp-auth-btn').textContent = isKP ? '마스터 로그아웃' : '🔒 마스터 로그인';
+
+            if (!autoLoginChecked) {
+                autoLoginChecked = true;
+                if (isKP) store.set(kpKey);
+                else if (kpKey) {
+                    // 저장된 비밀번호가 바뀐 경우
+                    store.clear(); kpKey = ''; socket.auth.key = '';
+                    showToast('저장된 마스터 비밀번호가 맞지 않습니다. 다시 로그인하세요.');
+                }
+            }
         });
+
+        // ================= 마스터 로그인 =================
+        function onAuthButton() {
+            if (isKP) {
+                if (!confirm('마스터에서 로그아웃할까요? 이 브라우저에 저장된 비밀번호도 지워집니다.')) return;
+                store.clear(); kpKey = ''; socket.auth.key = '';
+                socket.emit('kp:logout');
+                showToast('로그아웃했습니다.');
+            } else {
+                $('login-error').textContent = '';
+                $('login-password').value = '';
+                $('login-modal').classList.remove('hidden');
+                setTimeout(() => $('login-password').focus(), 50);
+            }
+        }
+        function closeLoginModal() { $('login-modal').classList.add('hidden'); }
+
+        function submitLogin(e) {
+            e.preventDefault();
+            const key = $('login-password').value;
+            if (!key) return;
+            $('login-submit').disabled = true;
+            socket.emit('kp:login', key, (res) => {
+                $('login-submit').disabled = false;
+                if (!res?.ok) { $('login-error').textContent = res?.error || '로그인에 실패했습니다.'; return; }
+                kpKey = key;
+                socket.auth.key = key; // 재연결돼도 마스터 유지
+                store.set(key);
+                closeLoginModal();
+                showToast('마스터로 로그인했습니다.');
+            });
+        }
 
         // ================= 타이머 =================
         let timerState = { initial: 0, remaining: 0, running: false, endAt: null };
@@ -284,6 +363,7 @@
             mediaState = st;
             $('media-name').textContent = st.name || '';
             $('clear-btn').classList.toggle('hidden', !st.url);
+            renderLibrary();
 
             if (!st.url) {
                 currentSrc = null;
@@ -361,59 +441,116 @@
             (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
         }
 
-        // --- KP: 업로드 ---
-        function onFileSelected(input) {
-            const file = input.files[0];
-            input.value = '';
-            if (!file) return;
-            if (!video.canPlayType(file.type || 'video/mp4')) {
-                showToast('이 형식은 브라우저에서 재생되지 않을 수 있습니다. MP4(H.264) 권장');
+        // --- KP: 영상 목록 ---
+        let library = [];
+        socket.on('library', (list) => { library = list; renderLibrary(); });
+
+        const formatSize = (b) => b >= 1024 ** 3 ? (b / 1024 ** 3).toFixed(1) + 'GB' : Math.round(b / 1024 ** 2) + 'MB';
+
+        function renderLibrary() {
+            if (!isKP) return;
+            const list = $('library-list');
+            list.replaceChildren();
+            $('library-empty').classList.toggle('hidden', library.length > 0);
+
+            for (const v of library) {
+                const active = mediaState?.currentId === v.id;
+                const row = document.createElement('div');
+                row.className = `flex items-center gap-3 px-3 py-2 rounded-lg border ${active ? 'bg-zinc-800 border-zinc-600' : 'bg-zinc-950/60 border-zinc-800'}`;
+
+                const name = document.createElement('div');
+                name.className = `flex-1 min-w-0 truncate text-xs ${active ? 'text-zinc-100 font-semibold' : 'text-zinc-300'}`;
+                name.textContent = (active ? '▶ ' : '') + v.name;
+                name.title = v.name;
+
+                const size = document.createElement('span');
+                size.className = 'text-[10px] text-zinc-500 font-mono shrink-0';
+                size.textContent = formatSize(v.size);
+
+                const play = document.createElement('button');
+                play.className = `text-xs px-2.5 py-1 rounded transition shrink-0 ${active ? 'bg-zinc-700 text-zinc-400 cursor-default' : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-semibold'}`;
+                play.textContent = active ? '화면에 표시 중' : '틀기';
+                play.disabled = active;
+                play.onclick = () => socket.emit('media:select', { id: v.id });
+
+                const del = document.createElement('button');
+                del.className = 'text-xs px-2.5 py-1 rounded transition shrink-0 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border border-zinc-700';
+                del.textContent = '삭제';
+                del.onclick = () => { if (confirm(`"${v.name}"을(를) 서버에서 삭제할까요?`)) socket.emit('library:delete', { id: v.id }); };
+
+                row.append(name, size, play, del);
+                list.append(row);
             }
-            uploadVideo(file);
         }
 
-        function uploadVideo(file) {
+        // --- KP: 업로드 (여러 개를 순서대로) ---
+        const uploadQueue = [];
+        let uploading = false;
+        let uploadTotal = 0, uploadDone = 0;
+
+        function onFileSelected(input) {
+            const files = [...input.files];
+            input.value = '';
+            for (const file of files) {
+                if (!video.canPlayType(file.type || 'video/mp4')) {
+                    showToast(`${file.name}: 브라우저에서 재생되지 않을 수 있는 형식입니다. MP4(H.264) 권장`);
+                }
+                uploadQueue.push(file);
+                uploadTotal++;
+            }
+            if (!uploading) nextUpload();
+        }
+
+        function setUploadUI(active) {
+            $('upload-progress-wrap').classList.toggle('hidden', !active);
+            $('upload-btn').disabled = active;
+            $('upload-btn').classList.toggle('opacity-50', active);
+            $('upload-progress-bar').style.width = '0%';
+            $('upload-progress-text').textContent = '0%';
+        }
+
+        function nextUpload() {
+            const file = uploadQueue.shift();
+            if (!file) {
+                uploading = false;
+                setUploadUI(false);
+                if (uploadTotal) showToast(`영상 ${uploadDone}/${uploadTotal}개를 올렸습니다.`);
+                uploadTotal = uploadDone = 0;
+                return;
+            }
+            uploading = true;
+            setUploadUI(true);
+            $('upload-progress-label').textContent = `업로드 중 (${uploadDone + 1}/${uploadTotal}) ${file.name}`;
+
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/api/upload');
             xhr.setRequestHeader('x-kp-key', kpKey);
             xhr.setRequestHeader('x-file-name', encodeURIComponent(file.name));
-
-            $('upload-progress-wrap').classList.remove('hidden');
-            $('upload-btn').disabled = true;
-            $('upload-btn').classList.add('opacity-50');
-
             xhr.upload.onprogress = (e) => {
                 if (!e.lengthComputable) return;
                 const pct = Math.round((e.loaded / e.total) * 100);
                 $('upload-progress-bar').style.width = pct + '%';
                 $('upload-progress-text').textContent = pct + '%';
             };
-            const done = () => {
-                $('upload-progress-wrap').classList.add('hidden');
-                $('upload-progress-bar').style.width = '0%';
-                $('upload-btn').disabled = false;
-                $('upload-btn').classList.remove('opacity-50');
-            };
             xhr.onload = () => {
-                done();
-                if (xhr.status === 200) return showToast('영상을 올렸습니다. 재생하면 모두에게 함께 재생됩니다.');
-                let msg = '업로드에 실패했습니다.';
-                try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
-                showToast(msg);
+                if (xhr.status === 200) uploadDone++;
+                else {
+                    let msg = '업로드에 실패했습니다.';
+                    try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+                    showToast(`${file.name}: ${msg}`);
+                }
+                nextUpload();
             };
-            xhr.onerror = () => { done(); showToast('업로드 중 연결이 끊겼습니다. 다시 시도하세요.'); };
+            xhr.onerror = () => { showToast(`${file.name}: 업로드 중 연결이 끊겼습니다.`); nextUpload(); };
 
             const fd = new FormData();
             fd.append('video', file);
             xhr.send(fd);
         }
 
-        function clearMedia() {
-            if (confirm('영상 공유를 중지할까요? 올린 파일은 서버에서 삭제됩니다.')) socket.emit('media:clear');
-        }
-
         // 모달: Enter 적용 / Esc 닫기
         document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !$('login-modal').classList.contains('hidden')) return closeLoginModal();
             if ($('time-modal').classList.contains('hidden')) return;
             if (e.key === 'Enter') applyCustomTime();
             if (e.key === 'Escape') closeTimeModal();
